@@ -1,0 +1,81 @@
+name: Build Crowd Surge APK
+
+on:
+  push:
+    branches: [codex/crowd-rush-android]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout build branch
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Restore game source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat crowd-surge-src/part-*.b64 > /tmp/crowd-src.b64
+          base64 -d /tmp/crowd-src.b64 > /tmp/crowd-src.tgz
+          echo '5d436d7b02d2a6cfabff5175b9a7af07054b2c31d4ff49abf8a75af552c9c7eb  /tmp/crowd-src.tgz' | sha256sum -c -
+          tar -xzf /tmp/crowd-src.tgz -C "$GITHUB_WORKSPACE"
+
+      - name: Fetch CC0 game audio
+        shell: bash
+        working-directory: CrowdRushAndroid
+        run: |
+          set -euo pipefail
+          mkdir -p app/src/main/res/raw
+          base='https://raw.githubusercontent.com/manuel-palacio/brickstorm/main/public/audio'
+          curl --fail --location --retry 3 "$base/laser.ogg"          -o app/src/main/res/raw/shot.ogg
+          curl --fail --location --retry 3 "$base/brick-hit.ogg"      -o app/src/main/res/raw/hit.ogg
+          curl --fail --location --retry 3 "$base/brick-break.ogg"    -o app/src/main/res/raw/boom.ogg
+          curl --fail --location --retry 3 "$base/powerup-get.ogg"    -o app/src/main/res/raw/powerup.ogg
+          curl --fail --location --retry 3 "$base/life-lost.ogg"      -o app/src/main/res/raw/hurt.ogg
+          curl --fail --location --retry 3 "$base/level-complete.ogg" -o app/src/main/res/raw/jingle.ogg
+          curl --fail --location --retry 3 "$base/game-over.ogg"      -o app/src/main/res/raw/gameover.ogg
+          curl --fail --location --retry 3 "$base/enemy-spawn.ogg"    -o app/src/main/res/raw/spawn.ogg
+          curl --fail --location --retry 3 "$base/music-game.ogg"     -o app/src/main/res/raw/music.ogg
+
+      - name: Assemble debug APK
+        working-directory: CrowdRushAndroid
+        run: gradle --no-daemon --stacktrace :app:assembleDebug
+
+      - name: Verify and stage APK
+        working-directory: CrowdRushAndroid
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk='app/build/outputs/apk/debug/app-debug.apk'
+          test -s "$apk"
+          BT=$(ls -1 "$ANDROID_HOME/build-tools" | sort -V | tail -1)
+          "$ANDROID_HOME/build-tools/$BT/apksigner" verify --verbose "$apk"
+          cp "$apk" CrowdSurge-Overdrive-v1.apk
+          sha256sum CrowdSurge-Overdrive-v1.apk > CrowdSurge-Overdrive-v1.apk.sha256
+          ls -lh CrowdSurge-Overdrive-v1.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: crowd-surge-apk
+          path: |
+            CrowdRushAndroid/CrowdSurge-Overdrive-v1.apk
+            CrowdRushAndroid/CrowdSurge-Overdrive-v1.apk.sha256
+          if-no-files-found: error
+          retention-days: 14
